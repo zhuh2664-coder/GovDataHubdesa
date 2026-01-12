@@ -3,114 +3,141 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>验证码查收</title>
+    <title>接码管理系统-批量版</title>
     <style>
-        body { font-family: sans-serif; background: #f4f7f9; display: flex; justify-content: center; padding: 20px; }
-        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); width: 100%; max-width: 450px; text-align: center; }
-        .sms-code { font-size: 45px; color: #007bff; font-weight: bold; margin: 20px 0; letter-spacing: 2px; }
-        .btn-main { width: 100%; padding: 14px; background: #007bff; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
-        .copy-box { background: #eee; padding: 10px; font-family: monospace; font-size: 12px; margin-top: 10px; border-radius: 4px; cursor: pointer; word-break: break-all; }
-        #log { font-size: 12px; color: #999; margin-top: 15px; }
+        :root { --primary: #007bff; --success: #28a745; }
+        body { font-family: -apple-system, sans-serif; background: #f4f7f9; display: flex; justify-content: center; padding: 20px; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); width: 100%; max-width: 550px; }
+        .input-row { display: flex; gap: 10px; margin-bottom: 15px; }
+        input, select { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
+        button { padding: 10px 20px; border: none; border-radius: 6px; color: white; cursor: pointer; font-weight: bold; }
+        #btnBatch { background: var(--primary); width: 100%; height: 50px; font-size: 16px; margin-bottom: 15px; }
+        #btnCopyAll { background: var(--success); display: none; margin-bottom: 10px; }
+        .result-list { background: #333; color: #adff2f; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 12px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+        /* 客户端样式 */
+        .client-view { text-align: center; display: none; }
+        .sms-code { font-size: 48px; color: var(--primary); font-weight: bold; margin: 30px 0; letter-spacing: 5px; }
+        .status-msg { color: #666; font-size: 14px; margin-bottom: 10px; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2 id="title">接码助手</h2>
+        <h2 id="title" style="text-align:center; margin-top:0;">接码助手后台</h2>
 
         <div id="adminPanel">
-            <input type="number" id="pid" value="1403" style="width:100%; padding:10px; margin-bottom:10px; box-sizing:border-box;" placeholder="项目PID">
-            <button class="btn-main" id="btnRun">一键取号并生成永久链接</button>
-            <div id="resultArea" style="display:none; margin-top:15px; text-align:left;">
-                <label style="font-size:12px; color:#666;">自动生成的永久格式：</label>
-                <div id="copyContent" class="copy-box"></div>
+            <div class="input-row">
+                <input type="number" id="pid" value="1403" placeholder="项目PID">
+                <input type="number" id="count" value="1" min="1" max="20" placeholder="取号数量">
+            </div>
+            <button id="btnBatch">开始批量取号 (生成永久链接)</button>
+            
+            <div id="resultArea" style="display:none; margin-top:15px;">
+                <button id="btnCopyAll">一键复制全部 10 行</button>
+                <div id="batchList" class="result-list"></div>
+                <p style="font-size: 11px; color: #999; margin-top: 5px;">* 格式已自动适配：+86手机号----永久链接</p>
             </div>
         </div>
 
-        <div id="clientPanel" style="display:none;">
-            <div id="status">正在同步数据...</div>
-            <div id="smsCode" class="sms-code">--- ---</div>
-            <div id="fullMsg" style="font-size: 13px; color: #999;"></div>
+        <div id="clientPanel" class="client-view">
+            <div class="status-msg" id="status">⏳ 正在同步数据...</div>
+            <div class="sms-code" id="smsCode">查收中</div>
+            <div id="fullMsg" style="font-size: 13px; color: #999; background:#f8f9fa; padding:10px; border-radius:6px;">等待验证码内容...</div>
         </div>
-
-        <div id="log">系统就绪</div>
     </div>
 
     <script>
         const TOKEN = "KbVpdZ2EBWvkJwMRyX35Q9LPq0z86AYG";
         const PROXY = "/api/proxy";
-        const urlParams = new URLSearchParams(window.location.search);
-        const phoneParam = urlParams.get('phone'); // 核心：按手机号查询
+        const params = new URLSearchParams(window.location.search);
+        const phoneParam = params.get('phone');
+        const pidParam = params.get('pid');
 
         if (phoneParam) {
-            startClientFlow(phoneParam);
+            runClient(phoneParam, pidParam);
         } else {
-            initAdminFlow();
+            runAdmin();
         }
 
-        // --- 1. 管理端逻辑 ---
-        function initAdminFlow() {
-            document.getElementById('btnRun').onclick = async function() {
+        // --- 管理员逻辑：循环取号 ---
+        function runAdmin() {
+            const btn = document.getElementById('btnBatch');
+            const batchList = document.getElementById('batchList');
+            const copyBtn = document.getElementById('btnCopyAll');
+
+            btn.onclick = async () => {
+                const count = parseInt(document.getElementById('count').value) || 1;
                 const pid = document.getElementById('pid').value;
-                this.disabled = true;
-                this.innerText = "获取中...";
+                btn.disabled = true;
+                btn.innerText = `正在批量取号 (0/${count})...`;
+                batchList.innerText = ""; // 清空旧数据
                 
-                try {
-                    const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
-                    if (res.code === 200) {
-                        const phone = res.data.phone;
-                        // 核心：生成的链接不再带 order_id，而是带 phone
-                        const permanentUrl = window.location.origin + window.location.pathname + "?phone=" + phone + "&pid=" + pid;
-                        const finalFormat = `+86${phone}----${permanentUrl}`;
-                        
-                        document.getElementById('copyContent').innerText = finalFormat;
-                        document.getElementById('resultArea').style.display = 'block';
-                        navigator.clipboard.writeText(finalFormat);
-                        this.innerText = "生成成功并已复制";
-                    } else { alert("取号失败: " + res.msg); }
-                } catch (e) { alert("网络错误"); }
-                this.disabled = false;
+                let results = [];
+
+                for (let i = 0; i < count; i++) {
+                    btn.innerText = `正在批量取号 (${i + 1}/${count})...`;
+                    try {
+                        const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
+                        if (res.code === 200) {
+                            const phone = res.data.phone;
+                            const link = `${window.location.origin}${window.location.pathname}?phone=${phone}&pid=${pid}`;
+                            const line = `+86${phone}----${link}`;
+                            results.push(line);
+                            batchList.innerText = results.join('\n'); // 实时显示
+                        } else {
+                            results.push(`第 ${i+1} 个失败: ${res.msg}`);
+                        }
+                    } catch (e) { results.push(`网络错误`); }
+                    // 稍微停顿一下，防止请求过快被接口封禁
+                    await new Promise(r => setTimeout(r, 500));
+                }
+
+                document.getElementById('resultArea').style.display = 'block';
+                copyBtn.style.display = 'block';
+                copyBtn.innerText = `一键复制全部 ${results.length} 行`;
+                copyBtn.onclick = () => {
+                    navigator.clipboard.writeText(results.join('\n'));
+                    alert("全部内容已复制！");
+                };
+                
+                btn.disabled = false;
+                btn.innerText = "开始批量取号 (生成永久链接)";
             };
         }
 
-        // --- 2. 客户展示逻辑 (自动续费订单) ---
-        async function startClientFlow(phone) {
+        // --- 客户端逻辑：3秒极速听码 ---
+        async function runClient(phone, pid) {
             document.getElementById('adminPanel').style.display = 'none';
             document.getElementById('clientPanel').style.display = 'block';
             document.getElementById('title').innerText = "验证码查收";
-            const pid = urlParams.get('pid') || "1403";
+            
             let currentOid = "";
+            const statusEl = document.getElementById('status');
 
-            // 第一步：自动去换一个新的订单号
-            const getNewOrder = async () => {
+            const getOid = async () => {
+                statusEl.innerText = "正在激活号码控制权...";
                 try {
-                    document.getElementById('status').innerText = "正在为您激活号码控制权...";
                     const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`).then(r => r.json());
-                    if (res.code === 200) {
-                        return res.data.order_id;
-                    }
-                    return null;
+                    return res.code === 200 ? res.data.order_id : null;
                 } catch (e) { return null; }
             };
 
-            currentOid = await getNewOrder();
-            if (!currentOid) {
-                document.getElementById('status').innerText = "❌ 该号码已过期或被释放";
-                return;
-            }
+            currentOid = await getOid();
+            if (!currentOid) { statusEl.innerText = "❌ 该号码无法激活或已释放"; return; }
 
-            // 第二步：开始轮询短信内容
-            setInterval(async () => {
+            statusEl.innerText = "⏳ 正在监听短信 (每3秒更新)...";
+            const timer = setInterval(async () => {
                 try {
                     const res = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${currentOid}`).then(r => r.json());
                     if (res.code === 200 && res.data.message) {
-                        document.getElementById('smsCode').innerText = res.data.code || "已收到";
+                        document.getElementById('smsCode').innerText = res.data.code || "已接收";
                         document.getElementById('fullMsg').innerText = res.data.message;
-                        document.getElementById('status').innerText = "✅ 验证码已同步";
-                    } else if (res.code === 5 || res.code === 6) { // 订单失效时，自动再申请一次
-                        currentOid = await getNewOrder();
+                        statusEl.innerText = "✅ 验证码同步成功";
+                        clearInterval(timer);
+                    } else if (res.code === 5 || res.code === 6) {
+                        currentOid = await getOid(); // 自动续期
                     }
                 } catch (e) {}
-            }, 8000);
+            }, 3000);
         }
     </script>
 </body>
