@@ -2,134 +2,89 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>API Data Service</title>
+    <title>SMS Service</title>
     <style>
-        body { background: #000; color: #adff2f; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; }
-        .admin-box { border: 2px solid #333; padding: 20px; background: #111; max-width: 800px; margin: 0 auto; border-radius: 8px; }
-        .input-group { margin: 15px 0; }
-        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 8px; width: 70px; margin-right: 10px; }
-        button { padding: 10px 20px; cursor: pointer; font-weight: bold; border: none; border-radius: 4px; }
-        #log-area { background: #000; color: #00ff00; padding: 15px; height: 350px; overflow-y: auto; border: 1px solid #222; font-size: 13px; margin-top: 15px; white-space: pre-wrap; }
-        .json-out { font-size: 20px; color: #adff2f; word-break: break-all; }
-        .hidden { display: none; }
+        body { background: #000; color: #adff2f; font-family: monospace; padding: 20px; }
+        .admin { background: #1a1a1a; padding: 20px; border: 1px solid #444; max-width: 600px; margin: 0 auto; }
+        input { background: #000; color: #0f0; border: 1px solid #444; padding: 8px; width: 60px; }
+        button { padding: 10px; cursor: pointer; }
+        #log { margin-top: 20px; white-space: pre-wrap; color: #0f0; }
     </style>
 </head>
 <body>
 
-    <div id="adminView" class="admin-box hidden">
-        <h2 style="color: #fff; margin-top: 0;">接码控制台 (锁定不释放版)</h2>
-        <div class="input-group">
-            项目PID: <input type="number" id="pid" value="1403">
-            取号数量: <input type="number" id="count" value="10">
-            <button id="btnStart" style="background: #007bff; color: white;">⚡ 批量取号 (锁定占用)</button>
-            <button id="btnClean" style="background: #dc3545; color: white; margin-left: 20px;">🗑️ 一键释放全部占用</button>
-        </div>
-        <div id="log-area">等待指令...</div>
+    <div id="adminView" style="display:none;" class="admin">
+        <h3>批量取号</h3>
+        PID: <input type="number" id="pid" value="1403">
+        数量: <input type="number" id="count" value="10">
+        <button id="btnStart">获取号码链接</button>
+        <div id="log"></div>
     </div>
 
-    <div id="jsonView" class="hidden">
-        <div id="json-output" class="json-out">加载中...</div>
-    </div>
+    <div id="json-output"></div>
 
     <script>
         const TOKEN = "KbVpdZ2EBWvkJwMRyX35Q9LPq0z86AYG";
         const PROXY = "/api/proxy";
         const urlParams = new URLSearchParams(window.location.search);
-        const phone = urlParams.get('phone');
-        const pid = urlParams.get('pid') || "1403";
+        const orderId = urlParams.get('oid'); // 链接直接传订单号
 
-        // --- 路由判断 ---
-        if (phone) {
-            document.getElementById('jsonView').classList.remove('hidden');
-            startClientFlow();
+        if (orderId) {
+            startClient(orderId);
         } else {
-            document.getElementById('adminView').classList.remove('hidden');
-            startAdminFlow();
+            document.getElementById('adminView').style.display = 'block';
+            startAdmin();
         }
 
-        // --- 管理员逻辑：批量霸占号码 ---
-        function startAdminFlow() {
+        // --- 简单取号逻辑 ---
+        function startAdmin() {
             const btn = document.getElementById('btnStart');
-            const btnClean = document.getElementById('btnClean');
-            const log = document.getElementById('log-area');
+            const log = document.getElementById('log');
 
             btn.onclick = async () => {
                 const count = document.getElementById('count').value;
-                const curPid = document.getElementById('pid').value;
-                btn.disabled = true;
-                log.innerText = `[${new Date().toLocaleTimeString()}] 正在批量获取并锁定 ${count} 个号码...\n`;
+                const pid = document.getElementById('pid').value;
+                log.innerText = "正在取号...\n";
                 let results = [];
 
                 for (let i = 0; i < count; i++) {
                     try {
-                        // 仅执行取号，不执行释放
-                        const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${curPid}`).then(r => r.json());
+                        const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
                         if (res.code === 200) {
                             const ph = res.data.phone;
-                            const link = `${window.location.origin}${window.location.pathname}?phone=${ph}&pid=${curPid}`;
+                            const oid = res.data.order_id;
+                            // 关键：链接里直接带上 order_id (oid)
+                            const link = `${window.location.origin}${window.location.pathname}?oid=${oid}`;
                             results.push(`+86${ph}----${link}`);
-                            log.innerText += `> 成功获取: ${ph}\n`;
+                            log.innerText += `已取到: ${ph}\n`;
                         } else {
-                            log.innerText += `> 停止: ${res.msg} (可能已达占用上限)\n`;
-                            break;
+                            log.innerText += `错误: ${res.msg}\n`;
                         }
-                    } catch (e) { log.innerText += `> 网络错误\n`; }
-                    await new Promise(r => setTimeout(r, 600));
+                    } catch (e) { log.innerText += "网络异常\n"; }
                 }
-
-                log.innerText += `\n--- 任务完成，已复制结果 ---\n` + results.join('\n');
+                log.innerText += "\n--- 复制下方内容 ---\n" + results.join('\n');
                 navigator.clipboard.writeText(results.join('\n'));
-                btn.disabled = false;
-            };
-
-            btnClean.onclick = async () => {
-                if(!confirm("确定要释放当前 Token 下的所有号码占用吗？")) return;
-                log.innerText = "正在执行全局清理...";
-                const res = await fetch(`${PROXY}?path=/api/sms/cancelAllRecv&token=${TOKEN}`).then(r => r.json());
-                log.innerText = res.code === 200 ? "清理成功！" : "清理失败：" + res.msg;
             };
         }
 
-        // --- 客户端逻辑：稳定 JSON 输出 ---
-        async function startClientFlow() {
+        // --- 简单查码逻辑 ---
+        function startClient(oid) {
             const out = document.getElementById('json-output');
-            let json = { 
-                "code": 0, 
-                "msg": "No verification code", 
-                "data": { "code": "", "code_time": "", "expired_date": "2026-03-09 00:00:00" } 
-            };
+            let resObj = { "code": 0, "msg": "No verification code", "data": { "code": "", "code_time": "" } };
             
-            const render = () => out.innerText = JSON.stringify(json);
+            const render = () => out.innerText = JSON.stringify(resObj);
             render();
 
-            const getOid = async () => {
+            // 每 3 秒只做一个动作：查这个订单号的短信
+            setInterval(async () => {
                 try {
-                    // 核心：通过 phone 找回现有订单
-                    const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`).then(r => r.json());
-                    if (res.code === 200) return res.data.order_id;
-                    return null;
-                } catch(e) { return null; }
-            };
-
-            let oid = await getOid();
-            if (!oid) {
-                json.msg = "Number Expired or Not Found (Please check Admin)";
-                render();
-                return;
-            }
-
-            const timer = setInterval(async () => {
-                try {
-                    const res = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
-                    if (res.code === 200 && res.data.message) {
-                        json.code = 1;
-                        json.msg = "Success";
-                        json.data.code = res.data.code || "";
-                        json.data.code_time = new Date().toLocaleString();
+                    const response = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
+                    if (response.code === 200 && response.data.message) {
+                        resObj.code = 1;
+                        resObj.msg = "Success";
+                        resObj.data.code = response.data.code || "";
+                        resObj.data.code_time = new Date().toLocaleString();
                         render();
-                        clearInterval(timer); // 查到即停
-                    } else if (res.code === 5 || res.code === 6) {
-                        oid = await getOid(); // 订单断线自动重连
                     }
                 } catch (e) {}
             }, 3000);
