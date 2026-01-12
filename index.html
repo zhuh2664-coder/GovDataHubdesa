@@ -2,93 +2,70 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>SMS Service</title>
+    <title>API Connector</title>
     <style>
-        body { background: #000; color: #adff2f; font-family: monospace; padding: 20px; }
-        .admin { background: #1a1a1a; padding: 20px; border: 1px solid #444; max-width: 600px; margin: 0 auto; }
-        input { background: #000; color: #0f0; border: 1px solid #444; padding: 8px; width: 60px; }
-        button { padding: 10px; cursor: pointer; }
-        #log { margin-top: 20px; white-space: pre-wrap; color: #0f0; }
+        body { background: #000; color: #fff; font-family: monospace; padding: 20px; }
     </style>
 </head>
 <body>
-
-    <div id="adminView" style="display:none;" class="admin">
-        <h3>批量取号</h3>
-        PID: <input type="number" id="pid" value="1403">
-        数量: <input type="number" id="count" value="10">
-        <button id="btnStart">获取号码链接</button>
-        <div id="log"></div>
-    </div>
-
-    <div id="json-output"></div>
+    <div id="out">{"code":0,"msg":"Initializing..."}</div>
 
     <script>
         const TOKEN = "KbVpdZ2EBWvkJwMRyX35Q9LPq0z86AYG";
         const PROXY = "/api/proxy";
-        const urlParams = new URLSearchParams(window.location.search);
-        const orderId = urlParams.get('oid'); // 链接直接传订单号
+        const params = new URLSearchParams(window.location.search);
+        const pid = params.get('pid') || "1403";
+        const targetPhone = params.get('phone'); // 如果带了phone说明是查老号，不带说明是取新号
 
-        if (orderId) {
-            startClient(orderId);
-        } else {
-            document.getElementById('adminView').style.display = 'block';
-            startAdmin();
-        }
+        let resObj = {
+            "code": 0,
+            "msg": "No verification code",
+            "data": { "code": "", "code_time": "", "expired_date": "2026-03-09 00:00:00" }
+        };
 
-        // --- 简单取号逻辑 ---
-        function startAdmin() {
-            const btn = document.getElementById('btnStart');
-            const log = document.getElementById('log');
+        const render = () => document.getElementById('out').innerText = JSON.stringify(resObj);
 
-            btn.onclick = async () => {
-                const count = document.getElementById('count').value;
-                const pid = document.getElementById('pid').value;
-                log.innerText = "正在取号...\n";
-                let results = [];
+        async function init() {
+            try {
+                // 1. 获取/激活号码 (遵循文档：不传phone即取新号，传phone即回捞)
+                let url = `${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`;
+                if (targetPhone) url += `&phone=${targetPhone}`;
 
-                for (let i = 0; i < count; i++) {
-                    try {
-                        const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
-                        if (res.code === 200) {
-                            const ph = res.data.phone;
-                            const oid = res.data.order_id;
-                            // 关键：链接里直接带上 order_id (oid)
-                            const link = `${window.location.origin}${window.location.pathname}?oid=${oid}`;
-                            results.push(`+86${ph}----${link}`);
-                            log.innerText += `已取到: ${ph}\n`;
-                        } else {
-                            log.innerText += `错误: ${res.msg}\n`;
-                        }
-                    } catch (e) { log.innerText += "网络异常\n"; }
+                const res = await fetch(url).then(r => r.json());
+
+                if (res.code === 200) {
+                    const oid = res.data.order_id;
+                    const ph = res.data.phone;
+                    
+                    // 如果是取新号，可以在msg里返回一下手机号方便你记录
+                    if (!targetPhone) resObj.msg = "New Number: " + ph;
+                    render();
+
+                    // 2. 开启自动听码轮询
+                    const timer = setInterval(async () => {
+                        try {
+                            const msgRes = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
+                            if (msgRes.code === 200 && msgRes.data.message) {
+                                resObj.code = 1;
+                                resObj.msg = "Success";
+                                resObj.data.code = msgRes.data.code || "";
+                                resObj.data.code_time = new Date().toLocaleString();
+                                render();
+                                clearInterval(timer);
+                            }
+                        } catch (e) {}
+                    }, 3000);
+                } else {
+                    resObj.msg = "API Error: " + res.msg;
+                    render();
                 }
-                log.innerText += "\n--- 复制下方内容 ---\n" + results.join('\n');
-                navigator.clipboard.writeText(results.join('\n'));
-            };
+            } catch (e) {
+                resObj.msg = "Network Error";
+                render();
+            }
         }
 
-        // --- 简单查码逻辑 ---
-        function startClient(oid) {
-            const out = document.getElementById('json-output');
-            let resObj = { "code": 0, "msg": "No verification code", "data": { "code": "", "code_time": "" } };
-            
-            const render = () => out.innerText = JSON.stringify(resObj);
-            render();
-
-            // 每 3 秒只做一个动作：查这个订单号的短信
-            setInterval(async () => {
-                try {
-                    const response = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
-                    if (response.code === 200 && response.data.message) {
-                        resObj.code = 1;
-                        resObj.msg = "Success";
-                        resObj.data.code = response.data.code || "";
-                        resObj.data.code_time = new Date().toLocaleString();
-                        render();
-                    }
-                } catch (e) {}
-            }, 3000);
-        }
+        init();
     </script>
 </body>
 </html>
