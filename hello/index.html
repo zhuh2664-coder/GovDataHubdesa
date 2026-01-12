@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>简易接码助手</title>
+    <style>
+        body { font-family: sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .card { margin-bottom: 20px; }
+        input, button { width: 100%; padding: 10px; margin-top: 10px; box-sizing: border-box; }
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; border-radius: 5px; }
+        button:disabled { background-color: #ccc; }
+        #log { background: #f8f9fa; padding: 10px; height: 150px; overflow-y: auto; font-size: 12px; border: 1px solid #eee; margin-top: 10px; }
+        .sms-box { background: #e7f3ff; padding: 15px; border-left: 5px solid #007bff; margin-top: 20px; display: none; }
+    </style>
+</head>
+<body>
+    <h2>接码助手</h2>
+    
+    <div class="card">
+        <label>项目 ID (PID):</label>
+        <input type="text" id="pid" value="1403">
+        <button id="getPhoneBtn">1. 获取手机号</button>
+    </div>
+
+    <div id="phoneDisplay" style="font-size: 1.2em; font-weight: bold; color: #d9534f; text-align: center;"></div>
+
+    <div class="card" id="step2" style="display:none;">
+        <p>已经在 App 发送验证码？</p>
+        <button id="startCheckBtn" style="background-color: #28a745;">2. 开始监听验证码</button>
+    </div>
+
+    <div id="smsResult" class="sms-box">
+        <strong>验证码内容：</strong>
+        <div id="smsContent">等待中...</div>
+    </div>
+
+    <div id="log">系统日志...</div>
+
+    <script>
+        const TOKEN = "KbVpdZ2EBWvkJwMRyX35Q9LPq0z86AYG";
+        const BASE_URL = "http://api.ee2026.com";
+        let currentOrderId = "";
+
+        function log(msg) {
+            const div = document.getElementById('log');
+            div.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            div.scrollTop = div.scrollHeight;
+        }
+
+        // 获取手机号
+        document.getElementById('getPhoneBtn').onclick = async () => {
+            const pid = document.getElementById('pid').value;
+            log("正在获取号码...");
+            try {
+                const response = await fetch(`${BASE_URL}/api/sms/getPhone?token=${TOKEN}&pid=${pid}`);
+                const res = await response.json();
+                if(res.code === 200) {
+                    currentOrderId = res.data.order_id;
+                    document.getElementById('phoneDisplay').innerText = "号码：" + res.data.phone;
+                    document.getElementById('step2').style.display = "block";
+                    log("取号成功：" + res.data.phone);
+                } else {
+                    log("取号失败：" + res.msg);
+                }
+            } catch (e) { log("网络请求失败，请检查浏览器是否允许跨域"); }
+        };
+
+        // 监听验证码
+        document.getElementById('startCheckBtn').onclick = function() {
+            this.disabled = true;
+            log("启动轮询模式，每10秒检查一次...");
+            document.getElementById('smsResult').style.display = "block";
+            
+            const timer = setInterval(async () => {
+                try {
+                    const response = await fetch(`${BASE_URL}/api/sms/getMessage?token=${TOKEN}&order_id=${currentOrderId}`);
+                    const res = await response.json();
+                    if(res.code === 200 && res.data.message) {
+                        document.getElementById('smsContent').innerText = res.data.message;
+                        log("🎉 成功获取验证码！");
+                        clearInterval(timer);
+                        document.getElementById('startCheckBtn').disabled = false;
+                    } else {
+                        log("尚未收到短信，继续等待...");
+                    }
+                } catch (e) { log("查询出错"); }
+            }, 10000);
+        };
+    </script>
+</body>
+</html>
