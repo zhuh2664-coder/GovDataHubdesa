@@ -2,128 +2,131 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>API Data Provider</title>
+    <title>接码管理系统-API版</title>
     <style>
-        body { background: #1e1e1e; color: #adff2f; font-family: monospace; padding: 20px; word-break: break-all; }
-        .admin-box { background: #2d2d2d; padding: 20px; border-radius: 8px; color: #eee; margin-bottom: 20px; }
-        input { padding: 8px; border-radius: 4px; border: 1px solid #444; background: #111; color: #fff; margin: 5px; }
-        button { padding: 10px 20px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
-        #log-area { white-space: pre-wrap; margin-top: 15px; border-top: 1px solid #444; padding-top: 10px; font-size: 12px; }
+        /* 强制背景为深色，防止闪烁 */
+        html, body { background: #1a1a1a; color: #adff2f; font-family: 'Courier New', Courier, monospace; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; border: 1px solid #444; padding: 20px; border-radius: 10px; background: #252525; }
+        .input-group { margin: 10px 0; }
+        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 8px; width: 80px; }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 4px; font-weight: bold; }
+        button:hover { background: #0056b3; }
+        #log-area { background: #000; color: #00ff00; padding: 15px; border-radius: 5px; height: 300px; overflow-y: auto; margin-top: 20px; font-size: 13px; line-height: 1.5; border: 1px solid #333; }
+        #json-view { font-size: 18px; color: #adff2f; word-break: break-all; }
+        .hidden { display: none; }
     </style>
 </head>
 <body>
-    <div id="adminPanel" class="admin-box">
-        <h3>批量取号后台 (取号后自动释放)</h3>
-        PID: <input type="number" id="pid" value="1403" style="width: 80px;">
-        数量: <input type="number" id="count" value="10" style="width: 60px;">
-        <button id="btnBatch">开始批量取号</button>
-        <button id="btnCopy" style="display:none; background:#28a745;">复制全部</button>
-        <div id="log-area">等待指令...</div>
+
+    <div id="adminView" class="container hidden">
+        <h2 style="color: #fff; border-bottom: 1px solid #444; padding-bottom: 10px;">控制台 - 批量取号</h2>
+        <div class="input-group">
+            项目PID: <input type="number" id="pid" value="1403">
+            取号数量: <input type="number" id="count" value="5">
+        </div>
+        <button id="btnBatch">⚡ 开始批量取号并释放占用</button>
+        <button id="btnCopy" style="background: #28a745; display: none;">📋 一键复制结果</button>
+        
+        <div id="log-area">等待指令输入...</div>
     </div>
 
-    <div id="json-output" style="display:none;"></div>
+    <div id="jsonView" class="hidden">
+        <div id="json-output">正在连接 API 服务器...</div>
+    </div>
 
     <script>
         const TOKEN = "KbVpdZ2EBWvkJwMRyX35Q9LPq0z86AYG";
         const PROXY = "/api/proxy";
-        const params = new URLSearchParams(window.location.search);
-        const phoneParam = params.get('phone');
-        const pidParam = params.get('pid') || "1403";
+        const urlParams = new URLSearchParams(window.location.search);
+        const phoneParam = urlParams.get('phone');
+        const pidParam = urlParams.get('pid') || "1403";
 
-        // --- 核心逻辑分流 ---
+        // 判断进入哪个模式
         if (phoneParam) {
-            document.getElementById('adminPanel').style.display = 'none';
-            document.getElementById('json-output').style.display = 'block';
+            document.getElementById('jsonView').classList.remove('hidden');
             startClientFlow(phoneParam, pidParam);
         } else {
+            document.getElementById('adminView').classList.remove('hidden');
             initAdminFlow();
         }
 
-        // --- 管理端：取号并立即释放 ---
+        // --- 管理员：取号 -> 记录 -> 释放 ---
         function initAdminFlow() {
             const btn = document.getElementById('btnBatch');
-            const logArea = document.getElementById('log-area');
+            const log = document.getElementById('log-area');
             const copyBtn = document.getElementById('btnCopy');
-            let resultList = [];
+            let results = [];
 
             btn.onclick = async () => {
                 const count = document.getElementById('count').value;
                 const pid = document.getElementById('pid').value;
                 btn.disabled = true;
-                resultList = [];
-                logArea.innerText = "正在开始任务...\n";
+                results = [];
+                log.innerHTML = "=== 任务开始 ===<br>";
 
                 for (let i = 0; i < count; i++) {
-                    logArea.innerText += `[${i+1}/${count}] 正在取号... `;
+                    log.innerHTML += `[${i+1}/${count}] 正在申请号码... `;
                     try {
-                        // 1. 获取号码
                         const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
                         if (res.code === 200) {
-                            const phone = res.data.phone;
-                            const link = `${window.location.origin}${window.location.pathname}?phone=${phone}&pid=${pid}`;
-                            resultList.push(`+86${phone}----${link}`);
+                            const ph = res.data.phone;
+                            const link = `${window.location.origin}${window.location.pathname}?phone=${ph}&pid=${pid}`;
+                            const format = `+86${ph}----${link}`;
+                            results.push(format);
                             
-                            logArea.innerText += `成功: ${phone}，正在释放占用...\n`;
-                            
-                            // 2. 立即释放 (cancelRecvByPhone)
-                            await fetch(`${PROXY}?path=/api/sms/cancelRecvByPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`);
+                            log.innerHTML += `<span style="color:#fff">成功: ${ph}</span><br>正在释放占用... `;
+                            // 立即释放，不占配额
+                            await fetch(`${PROXY}?path=/api/sms/cancelRecvByPhone&token=${TOKEN}&pid=${pid}&phone=${ph}`);
+                            log.innerHTML += `已释放 ✔<br>`;
                         } else {
-                            logArea.innerText += `失败: ${res.msg}\n`;
+                            log.innerHTML += `<span style="color:red">失败: ${res.msg}</span><br>`;
                         }
-                    } catch (e) { logArea.innerText += `网络异常\n`; }
-                    await new Promise(r => setTimeout(r, 800)); // 避开频率限制
+                    } catch (e) { log.innerHTML += `网络错误<br>`; }
+                    // 滚动到底部
+                    log.scrollTop = log.scrollHeight;
+                    await new Promise(r => setTimeout(r, 800));
                 }
 
                 btn.disabled = false;
-                logArea.innerText += "\n=== 任务完成 ===\n" + resultList.join('\n');
+                log.innerHTML += `<br>=== 任务完成 ===<br><pre>${results.join('\n')}</pre>`;
                 copyBtn.style.display = 'inline-block';
                 copyBtn.onclick = () => {
-                    navigator.clipboard.writeText(resultList.join('\n'));
-                    alert("复制成功！");
+                    navigator.clipboard.writeText(results.join('\n'));
+                    alert("全部格式已复制");
                 };
             };
         }
 
-        // --- 客户端：按需激活并查询 (输出纯 JSON) ---
-        async function startClientFlow(phone, pid) {
-            let responseData = { "code": 0, "msg": "No verification code", "data": { "code": "", "code_time": "", "expired_date": "2026-03-09 00:00:00" } };
-            const render = () => document.getElementById('json-output').innerText = JSON.stringify(responseData);
+        // --- 客户端：纯 JSON 输出 ---
+        async function startClientFlow(ph, pd) {
+            let data = { "code": 0, "msg": "No verification code", "data": { "code": "", "code_time": "", "expired_date": "2026-03-09 00:00:00" } };
+            const output = document.getElementById('json-output');
             
-            // 首次激活
-            let currentOid = "";
             const activate = async () => {
-                try {
-                    const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`).then(r => r.json());
-                    if (res.code === 200) return res.data.order_id;
-                } catch (e) {}
-                return null;
+                const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pd}&phone=${ph}`).then(r => r.json());
+                return res.code === 200 ? res.data.order_id : null;
             };
 
-            currentOid = await activate();
-            render();
+            let oid = await activate();
+            output.innerText = JSON.stringify(data);
 
-            if (!currentOid) {
-                responseData.msg = "Number could not be re-activated";
-                render();
+            if (!oid) {
+                data.msg = "Number re-activation failed";
+                output.innerText = JSON.stringify(data);
                 return;
             }
 
-            // 轮询并自动维护订单
-            const timer = setInterval(async () => {
+            setInterval(async () => {
                 try {
-                    const res = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${currentOid}`).then(r => r.json());
+                    const res = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
                     if (res.code === 200 && res.data.message) {
-                        responseData.code = 1;
-                        responseData.msg = "Success";
-                        responseData.data.code = res.data.code || "";
-                        responseData.data.code_time = new Date().toLocaleString();
-                        render();
-                        
-                        // 拿到验证码后自动释放
-                        fetch(`${PROXY}?path=/api/sms/cancelRecvByPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`);
-                        clearInterval(timer);
+                        data.code = 1;
+                        data.msg = "Success";
+                        data.data.code = res.data.code || "";
+                        data.data.code_time = new Date().toLocaleString();
+                        output.innerText = JSON.stringify(data);
                     } else if (res.code === 5 || res.code === 6) {
-                        currentOid = await activate(); // 订单失效自动找回
+                        oid = await activate(); // 超时重连
                     }
                 } catch (e) {}
             }, 3000);
