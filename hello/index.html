@@ -2,90 +2,116 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>简易接码助手</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全自动接码工具</title>
     <style>
-        body { font-family: sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        .card { margin-bottom: 20px; }
-        input, button { width: 100%; padding: 10px; margin-top: 10px; box-sizing: border-box; }
-        button { background-color: #007bff; color: white; border: none; cursor: pointer; border-radius: 5px; }
+        body { font-family: sans-serif; max-width: 500px; margin: 30px auto; padding: 20px; line-height: 1.6; background: #f9f9f9; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        input, button { width: 100%; padding: 12px; margin-top: 10px; box-sizing: border-box; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
+        button { background-color: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; }
         button:disabled { background-color: #ccc; }
-        #log { background: #f8f9fa; padding: 10px; height: 150px; overflow-y: auto; font-size: 12px; border: 1px solid #eee; margin-top: 10px; }
-        .sms-box { background: #e7f3ff; padding: 15px; border-left: 5px solid #007bff; margin-top: 20px; display: none; }
+        #resultDisplay { display: none; background: #fff3cd; padding: 15px; border: 1px solid #ffeeba; border-radius: 8px; margin-top: 20px; word-break: break-all; cursor: pointer; }
+        .code-box { display: none; background: #e7f3ff; padding: 20px; text-align: center; border-radius: 8px; margin-top: 20px; }
+        #smsCode { font-size: 32px; font-weight: bold; color: #007bff; display: block; margin: 10px 0; }
+        #log { font-size: 12px; color: #999; margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px; }
     </style>
 </head>
 <body>
-    <h2>接码助手</h2>
-    
-    <div class="card">
+    <div class="card" id="adminPanel">
+        <h2 style="margin-top:0">管理端 - 取号</h2>
         <label>项目 ID (PID):</label>
         <input type="text" id="pid" value="1403">
-        <button id="getPhoneBtn">1. 获取手机号</button>
+        <button id="getPhoneBtn">一键取号并生成格式</button>
+        
+        <div id="resultDisplay" title="点击可再次复制">
+            <strong style="font-size: 14px; color: #856404;">已复制到剪贴板：</strong>
+            <div id="formattedText" style="margin-top:5px; font-family: monospace; font-size: 13px;"></div>
+        </div>
     </div>
 
-    <div id="phoneDisplay" style="font-size: 1.2em; font-weight: bold; color: #d9534f; text-align: center;"></div>
-
-    <div class="card" id="step2" style="display:none;">
-        <p>已经在 App 发送验证码？</p>
-        <button id="startCheckBtn" style="background-color: #28a745;">2. 开始监听验证码</button>
+    <div class="card" id="clientPanel" style="display:none;">
+        <h2 style="margin-top:0">查收验证码</h2>
+        <div id="status" style="color: #666;">等待短信接入...</div>
+        <div id="smsCodeArea" class="code-box">
+            <span id="smsCode">查收中...</span>
+            <div id="fullSms" style="font-size: 12px; color: #888;"></div>
+        </div>
     </div>
 
-    <div id="smsResult" class="sms-box">
-        <strong>验证码内容：</strong>
-        <div id="smsContent">等待中...</div>
-    </div>
-
-    <div id="log">系统日志...</div>
+    <div id="log">系统就绪</div>
 
     <script>
         const TOKEN = "KbVpdZ2EBWvkJwMRyX35Q9LPq0z86AYG";
-        const BASE_URL = "http://api.ee2026.com";
-        let currentOrderId = "";
+        const PROXY_URL = "/api/proxy"; // 对应 Vercel 的 api/proxy.js
+
+        const params = new URLSearchParams(window.location.search);
+        const orderIdFromUrl = params.get('order_id');
 
         function log(msg) {
-            const div = document.getElementById('log');
-            div.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
-            div.scrollTop = div.scrollHeight;
+            document.getElementById('log').innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
         }
 
-        // 获取手机号
+        // --- 逻辑 1：别人点开链接时的“查码模式” ---
+        if (orderIdFromUrl) {
+            document.getElementById('adminPanel').style.display = 'none';
+            document.getElementById('clientPanel').style.display = 'block';
+            document.getElementById('smsCodeArea').style.display = 'block';
+            startPolling(orderIdFromUrl);
+        }
+
+        // --- 逻辑 2：你点开链接时的“取号模式” ---
         document.getElementById('getPhoneBtn').onclick = async () => {
+            const btn = document.getElementById('getPhoneBtn');
             const pid = document.getElementById('pid').value;
-            log("正在获取号码...");
+            btn.disabled = true;
+            log("正在请求接口...");
+
             try {
-                const response = await fetch(`${BASE_URL}/api/sms/getPhone?token=${TOKEN}&pid=${pid}`);
-                const res = await response.json();
+                const res = await fetch(`${PROXY_URL}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
+                
                 if(res.code === 200) {
-                    currentOrderId = res.data.order_id;
-                    document.getElementById('phoneDisplay').innerText = "号码：" + res.data.phone;
-                    document.getElementById('step2').style.display = "block";
-                    log("取号成功：" + res.data.phone);
+                    const phone = res.data.phone;
+                    const oid = res.data.order_id;
+                    // 自动拼接你的 Vercel 域名链接
+                    const shareUrl = window.location.origin + window.location.pathname + "?order_id=" + oid;
+                    const finalOutput = `+86${phone}----${shareUrl}`;
+
+                    document.getElementById('formattedText').innerText = finalOutput;
+                    document.getElementById('resultDisplay').style.display = 'block';
+                    
+                    // 自动复制到剪贴板
+                    navigator.clipboard.writeText(finalOutput);
+                    log("取号成功，已自动复制！");
                 } else {
-                    log("取号失败：" + res.msg);
+                    alert("取号失败：" + res.msg);
                 }
-            } catch (e) { log("网络请求失败，请检查浏览器是否允许跨域"); }
+            } catch (e) {
+                log("网络错误，请检查 Vercel 部署状态");
+            } finally {
+                btn.disabled = false;
+            }
         };
 
-        // 监听验证码
-        document.getElementById('startCheckBtn').onclick = function() {
-            this.disabled = true;
-            log("启动轮询模式，每10秒检查一次...");
-            document.getElementById('smsResult').style.display = "block";
-            
+        // 点击结果框可以重复复制
+        document.getElementById('resultDisplay').onclick = function() {
+            navigator.clipboard.writeText(document.getElementById('formattedText').innerText);
+            alert("已再次复制！");
+        };
+
+        // 轮询短信函数
+        function startPolling(oid) {
             const timer = setInterval(async () => {
                 try {
-                    const response = await fetch(`${BASE_URL}/api/sms/getMessage?token=${TOKEN}&order_id=${currentOrderId}`);
-                    const res = await response.json();
-                    if(res.code === 200 && res.data.message) {
-                        document.getElementById('smsContent').innerText = res.data.message;
-                        log("🎉 成功获取验证码！");
+                    const res = await fetch(`${PROXY_URL}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
+                    if (res.code === 200 && res.data.message) {
+                        document.getElementById('smsCode').innerText = res.data.code || "已收到";
+                        document.getElementById('fullSms').innerText = res.data.message;
+                        document.getElementById('status').innerText = "✅ 验证码已送达";
                         clearInterval(timer);
-                        document.getElementById('startCheckBtn').disabled = false;
-                    } else {
-                        log("尚未收到短信，继续等待...");
                     }
-                } catch (e) { log("查询出错"); }
-            }, 10000);
-        };
+                } catch (e) { console.error("轮询错误"); }
+            }, 8000);
+        }
     </script>
 </body>
 </html>
