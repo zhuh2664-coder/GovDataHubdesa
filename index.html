@@ -4,93 +4,129 @@
     <meta charset="UTF-8">
     <title>API Data Provider</title>
     <style>
-        body { 
-            background-color: #1e1e1e; color: #adff2f; 
-            font-family: monospace; padding: 20px; word-break: break-all; 
-        }
+        body { background: #1e1e1e; color: #adff2f; font-family: monospace; padding: 20px; word-break: break-all; }
+        .admin-box { background: #2d2d2d; padding: 20px; border-radius: 8px; color: #eee; margin-bottom: 20px; }
+        input { padding: 8px; border-radius: 4px; border: 1px solid #444; background: #111; color: #fff; margin: 5px; }
+        button { padding: 10px 20px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
+        #log-area { white-space: pre-wrap; margin-top: 15px; border-top: 1px solid #444; padding-top: 10px; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div id="json-output">加载中...</div>
+    <div id="adminPanel" class="admin-box">
+        <h3>批量取号后台 (取号后自动释放)</h3>
+        PID: <input type="number" id="pid" value="1403" style="width: 80px;">
+        数量: <input type="number" id="count" value="10" style="width: 60px;">
+        <button id="btnBatch">开始批量取号</button>
+        <button id="btnCopy" style="display:none; background:#28a745;">复制全部</button>
+        <div id="log-area">等待指令...</div>
+    </div>
+
+    <div id="json-output" style="display:none;"></div>
 
     <script>
         const TOKEN = "KbVpdZ2EBWvkJwMRyX35Q9LPq0z86AYG";
         const PROXY = "/api/proxy";
         const params = new URLSearchParams(window.location.search);
-        const phone = params.get('phone');
-        const pid = params.get('pid') || "1403";
+        const phoneParam = params.get('phone');
+        const pidParam = params.get('pid') || "1403";
 
-        // 默认返回模板（未收到验证码时）
-        let responseData = {
-            "code": 0,
-            "msg": "No verification code",
-            "data": {
-                "code": "",
-                "code_time": "",
-                "expired_date": "2026-03-09 00:00:00"
-            }
-        };
+        // --- 核心逻辑分流 ---
+        if (phoneParam) {
+            document.getElementById('adminPanel').style.display = 'none';
+            document.getElementById('json-output').style.display = 'block';
+            startClientFlow(phoneParam, pidParam);
+        } else {
+            initAdminFlow();
+        }
 
-        const render = () => {
-            document.getElementById('json-output').innerText = JSON.stringify(responseData);
-        };
+        // --- 管理端：取号并立即释放 ---
+        function initAdminFlow() {
+            const btn = document.getElementById('btnBatch');
+            const logArea = document.getElementById('log-area');
+            const copyBtn = document.getElementById('btnCopy');
+            let resultList = [];
 
-        async function startApiFlow() {
-            if (!phone) {
-                responseData.msg = "Missing phone parameter";
+            btn.onclick = async () => {
+                const count = document.getElementById('count').value;
+                const pid = document.getElementById('pid').value;
+                btn.disabled = true;
+                resultList = [];
+                logArea.innerText = "正在开始任务...\n";
+
+                for (let i = 0; i < count; i++) {
+                    logArea.innerText += `[${i+1}/${count}] 正在取号... `;
+                    try {
+                        // 1. 获取号码
+                        const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
+                        if (res.code === 200) {
+                            const phone = res.data.phone;
+                            const link = `${window.location.origin}${window.location.pathname}?phone=${phone}&pid=${pid}`;
+                            resultList.push(`+86${phone}----${link}`);
+                            
+                            logArea.innerText += `成功: ${phone}，正在释放占用...\n`;
+                            
+                            // 2. 立即释放 (cancelRecvByPhone)
+                            await fetch(`${PROXY}?path=/api/sms/cancelRecvByPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`);
+                        } else {
+                            logArea.innerText += `失败: ${res.msg}\n`;
+                        }
+                    } catch (e) { logArea.innerText += `网络异常\n`; }
+                    await new Promise(r => setTimeout(r, 800)); // 避开频率限制
+                }
+
+                btn.disabled = false;
+                logArea.innerText += "\n=== 任务完成 ===\n" + resultList.join('\n');
+                copyBtn.style.display = 'inline-block';
+                copyBtn.onclick = () => {
+                    navigator.clipboard.writeText(resultList.join('\n'));
+                    alert("复制成功！");
+                };
+            };
+        }
+
+        // --- 客户端：按需激活并查询 (输出纯 JSON) ---
+        async function startClientFlow(phone, pid) {
+            let responseData = { "code": 0, "msg": "No verification code", "data": { "code": "", "code_time": "", "expired_date": "2026-03-09 00:00:00" } };
+            const render = () => document.getElementById('json-output').innerText = JSON.stringify(responseData);
+            
+            // 首次激活
+            let currentOid = "";
+            const activate = async () => {
+                try {
+                    const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`).then(r => r.json());
+                    if (res.code === 200) return res.data.order_id;
+                } catch (e) {}
+                return null;
+            };
+
+            currentOid = await activate();
+            render();
+
+            if (!currentOid) {
+                responseData.msg = "Number could not be re-activated";
                 render();
                 return;
             }
 
-            // 1. 激活控制权并获取订单
-            try {
-                const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`).then(r => r.json());
-                if (res.code === 200) {
-                    const oid = res.data.order_id;
-                    pollSms(oid);
-                } else {
-                    responseData.msg = "Number expired or released";
-                    render();
-                }
-            } catch (e) {
-                responseData.msg = "Proxy Error";
-                render();
-            }
-        }
-
-        function pollSms(oid) {
+            // 轮询并自动维护订单
             const timer = setInterval(async () => {
                 try {
-                    const res = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
-                    
+                    const res = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${currentOid}`).then(r => r.json());
                     if (res.code === 200 && res.data.message) {
-                        // 2. 成功获取，修改 JSON 内容
-                        responseData.code = 1; // 1 表示成功拿到
+                        responseData.code = 1;
                         responseData.msg = "Success";
-                        responseData.data.code = res.data.code || ""; // 提取纯数字验证码
+                        responseData.data.code = res.data.code || "";
                         responseData.data.code_time = new Date().toLocaleString();
-                        
                         render();
+                        
+                        // 拿到验证码后自动释放
+                        fetch(`${PROXY}?path=/api/sms/cancelRecvByPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`);
                         clearInterval(timer);
                     } else if (res.code === 5 || res.code === 6) {
-                        // 订单失效尝试自动重连一次
-                        clearInterval(timer);
-                        startApiFlow();
-                    } else {
-                        // 持续输出“未收到”的初始 JSON
-                        render();
+                        currentOid = await activate(); // 订单失效自动找回
                     }
                 } catch (e) {}
             }, 3000);
-        }
-
-        // 如果是管理端（没带phone参数），则显示原来的批量取号界面
-        if (!phone) {
-            // 这里保留你之前的批量管理后台 HTML 代码，或者直接跳转
-            window.location.href = "about:blank"; // 或者显示一个简单的提示
-            document.body.innerHTML = "<h2>管理后台请使用主域名访问</h2>";
-        } else {
-            startApiFlow();
         }
     </script>
 </body>
