@@ -2,36 +2,38 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>接码管理系统-API版</title>
+    <title>接码管理系统</title>
     <style>
-        /* 强制背景为深色，防止闪烁 */
-        html, body { background: #1a1a1a; color: #adff2f; font-family: 'Courier New', Courier, monospace; margin: 0; padding: 20px; }
-        .container { max-width: 600px; margin: 0 auto; border: 1px solid #444; padding: 20px; border-radius: 10px; background: #252525; }
-        .input-group { margin: 10px 0; }
-        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 8px; width: 80px; }
-        button { background: #007bff; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 4px; font-weight: bold; }
-        button:hover { background: #0056b3; }
-        #log-area { background: #000; color: #00ff00; padding: 15px; border-radius: 5px; height: 300px; overflow-y: auto; margin-top: 20px; font-size: 13px; line-height: 1.5; border: 1px solid #333; }
+        body { background: #1a1a1a; color: #adff2f; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; }
+        .container { max-width: 650px; margin: 0 auto; background: #252525; padding: 20px; border-radius: 12px; border: 1px solid #444; }
+        h3 { color: #fff; margin-top: 0; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        .input-group { margin: 15px 0; font-size: 14px; }
+        input { background: #000; color: #0f0; border: 1px solid #444; padding: 8px; width: 80px; margin-right: 10px; outline: none; }
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        #log-area { background: #000; color: #00ff00; padding: 15px; border-radius: 6px; height: 350px; overflow-y: auto; margin-top: 15px; font-size: 13px; line-height: 1.6; border: 1px solid #333; }
         #json-view { font-size: 18px; color: #adff2f; word-break: break-all; }
         .hidden { display: none; }
+        pre { white-space: pre-wrap; word-wrap: break-word; color: #adff2f; margin: 10px 0; }
     </style>
 </head>
 <body>
 
     <div id="adminView" class="container hidden">
-        <h2 style="color: #fff; border-bottom: 1px solid #444; padding-bottom: 10px;">控制台 - 批量取号</h2>
+        <h3>⚡ 极速批量取号助手 (自动释放版)</h3>
         <div class="input-group">
             项目PID: <input type="number" id="pid" value="1403">
-            取号数量: <input type="number" id="count" value="5">
+            数量: <input type="number" id="count" value="10">
+            <button id="btnBatch">开始批量任务</button>
         </div>
-        <button id="btnBatch">⚡ 开始批量取号并释放占用</button>
-        <button id="btnCopy" style="background: #28a745; display: none;">📋 一键复制结果</button>
-        
-        <div id="log-area">等待指令输入...</div>
+        <div id="copyArea" class="hidden">
+            <button id="btnCopy" style="background: #28a745; margin-bottom: 10px;">📋 一键复制结果</button>
+        </div>
+        <div id="log-area">等待指令...</div>
     </div>
 
     <div id="jsonView" class="hidden">
-        <div id="json-output">正在连接 API 服务器...</div>
+        <div id="json-output">{"status": "initializing"}</div>
     </div>
 
     <script>
@@ -41,7 +43,7 @@
         const phoneParam = urlParams.get('phone');
         const pidParam = urlParams.get('pid') || "1403";
 
-        // 判断进入哪个模式
+        // --- 路由分配 ---
         if (phoneParam) {
             document.getElementById('jsonView').classList.remove('hidden');
             startClientFlow(phoneParam, pidParam);
@@ -50,11 +52,12 @@
             initAdminFlow();
         }
 
-        // --- 管理员：取号 -> 记录 -> 释放 ---
+        // --- 管理端逻辑 ---
         function initAdminFlow() {
             const btn = document.getElementById('btnBatch');
             const log = document.getElementById('log-area');
-            const copyBtn = document.getElementById('btnCopy');
+            const copyArea = document.getElementById('copyArea');
+            const btnCopy = document.getElementById('btnCopy');
             let results = [];
 
             btn.onclick = async () => {
@@ -62,71 +65,75 @@
                 const pid = document.getElementById('pid').value;
                 btn.disabled = true;
                 results = [];
-                log.innerHTML = "=== 任务开始 ===<br>";
+                log.innerHTML = `> 开始获取 ${count} 个号码...<br>`;
 
                 for (let i = 0; i < count; i++) {
-                    log.innerHTML += `[${i+1}/${count}] 正在申请号码... `;
+                    const idx = i + 1;
+                    log.innerHTML += `[${idx}/${count}] 请求中... `;
                     try {
                         const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
                         if (res.code === 200) {
                             const ph = res.data.phone;
-                            const link = `${window.location.origin}${window.location.pathname}?phone=${ph}&pid=${pid}`;
-                            const format = `+86${ph}----${link}`;
+                            const shareUrl = `${window.location.origin}${window.location.pathname}?phone=${ph}&pid=${pid}`;
+                            const format = `+86${ph}----${shareUrl}`;
                             results.push(format);
                             
-                            log.innerHTML += `<span style="color:#fff">成功: ${ph}</span><br>正在释放占用... `;
-                            // 立即释放，不占配额
-                            await fetch(`${PROXY}?path=/api/sms/cancelRecvByPhone&token=${TOKEN}&pid=${pid}&phone=${ph}`);
-                            log.innerHTML += `已释放 ✔<br>`;
+                            log.innerHTML += `<span style="color:#fff">成功(${ph})</span> | 释放状态: `;
+                            // 立即释放
+                            const release = await fetch(`${PROXY}?path=/api/sms/cancelRecvByPhone&token=${TOKEN}&pid=${pid}&phone=${ph}`).then(r => r.json());
+                            log.innerHTML += release.code === 200 ? "✔ 已释放<br>" : `<span style="color:red">释放失败</span><br>`;
                         } else {
                             log.innerHTML += `<span style="color:red">失败: ${res.msg}</span><br>`;
                         }
                     } catch (e) { log.innerHTML += `网络错误<br>`; }
-                    // 滚动到底部
                     log.scrollTop = log.scrollHeight;
-                    await new Promise(r => setTimeout(r, 800));
+                    await new Promise(r => setTimeout(r, 600)); // 略微停顿，防止平台封禁
                 }
 
-                btn.disabled = false;
-                log.innerHTML += `<br>=== 任务完成 ===<br><pre>${results.join('\n')}</pre>`;
-                copyBtn.style.display = 'inline-block';
-                copyBtn.onclick = () => {
+                log.innerHTML += `<br>--- 批量任务完成 ---<br><pre id="finalList">${results.join('\n')}</pre>`;
+                copyArea.classList.remove('hidden');
+                btnCopy.onclick = () => {
                     navigator.clipboard.writeText(results.join('\n'));
-                    alert("全部格式已复制");
+                    alert("已全部复制到剪贴板！");
                 };
+                btn.disabled = false;
             };
         }
 
-        // --- 客户端：纯 JSON 输出 ---
+        // --- 客户端逻辑 (输出 JSON) ---
         async function startClientFlow(ph, pd) {
-            let data = { "code": 0, "msg": "No verification code", "data": { "code": "", "code_time": "", "expired_date": "2026-03-09 00:00:00" } };
+            let baseData = { "code": 0, "msg": "No verification code", "data": { "code": "", "code_time": "", "expired_date": "2026-03-09 00:00:00" } };
             const output = document.getElementById('json-output');
             
             const activate = async () => {
-                const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pd}&phone=${ph}`).then(r => r.json());
-                return res.code === 200 ? res.data.order_id : null;
+                try {
+                    const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pd}&phone=${ph}`).then(r => r.json());
+                    return res.code === 200 ? res.data.order_id : null;
+                } catch(e) { return null; }
             };
 
             let oid = await activate();
-            output.innerText = JSON.stringify(data);
+            output.innerText = JSON.stringify(baseData);
 
             if (!oid) {
-                data.msg = "Number re-activation failed";
-                output.innerText = JSON.stringify(data);
+                baseData.msg = "Activate Failed (Expired or Released)";
+                output.innerText = JSON.stringify(baseData);
                 return;
             }
 
-            setInterval(async () => {
+            // 3秒轮询
+            const timer = setInterval(async () => {
                 try {
                     const res = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
                     if (res.code === 200 && res.data.message) {
-                        data.code = 1;
-                        data.msg = "Success";
-                        data.data.code = res.data.code || "";
-                        data.data.code_time = new Date().toLocaleString();
-                        output.innerText = JSON.stringify(data);
+                        baseData.code = 1;
+                        baseData.msg = "Success";
+                        baseData.data.code = res.data.code || "";
+                        baseData.data.code_time = new Date().toLocaleString();
+                        output.innerText = JSON.stringify(baseData);
+                        clearInterval(timer);
                     } else if (res.code === 5 || res.code === 6) {
-                        oid = await activate(); // 超时重连
+                        oid = await activate(); // 自动找回
                     }
                 } catch (e) {}
             }, 3000);
