@@ -2,20 +2,19 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>API Connector</title>
-    <style>
-        body { background: #000; color: #fff; font-family: monospace; padding: 20px; }
-    </style>
+    <title>JSON Service</title>
+    <style>body { background: #000; color: #fff; font-family: monospace; padding: 20px; }</style>
 </head>
 <body>
-    <div id="out">{"code":0,"msg":"Initializing..."}</div>
+    <div id="out">{"code":0,"msg":"Connecting..."}</div>
 
     <script>
         const TOKEN = "KbVpdZ2EBWvkJwMRyX35Q9LPq0z86AYG";
         const PROXY = "/api/proxy";
         const params = new URLSearchParams(window.location.search);
+        
+        const phone = params.get('phone');
         const pid = params.get('pid') || "1403";
-        const targetPhone = params.get('phone'); // 如果带了phone说明是查老号，不带说明是取新号
 
         let resObj = {
             "code": 0,
@@ -25,25 +24,19 @@
 
         const render = () => document.getElementById('out').innerText = JSON.stringify(resObj);
 
-        async function init() {
-            try {
-                // 1. 获取/激活号码 (遵循文档：不传phone即取新号，传phone即回捞)
-                let url = `${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`;
-                if (targetPhone) url += `&phone=${targetPhone}`;
-
-                const res = await fetch(url).then(r => r.json());
-
-                if (res.code === 200) {
-                    const oid = res.data.order_id;
-                    const ph = res.data.phone;
+        // --- 逻辑：查手机号 ---
+        async function startFlow() {
+            // 1. 客户访问带 phone 的链接：先通过 getPhone&phone=xxx 获取该号码的 order_id
+            if (phone) {
+                try {
+                    const activeRes = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}&phone=${phone}`).then(r => r.json());
                     
-                    // 如果是取新号，可以在msg里返回一下手机号方便你记录
-                    if (!targetPhone) resObj.msg = "New Number: " + ph;
-                    render();
+                    if (activeRes.code === 200) {
+                        const oid = activeRes.data.order_id;
+                        render();
 
-                    // 2. 开启自动听码轮询
-                    const timer = setInterval(async () => {
-                        try {
+                        // 2. 拿到 order_id 后，开始轮询查短信
+                        const timer = setInterval(async () => {
                             const msgRes = await fetch(`${PROXY}?path=/api/sms/getMessage&token=${TOKEN}&order_id=${oid}`).then(r => r.json());
                             if (msgRes.code === 200 && msgRes.data.message) {
                                 resObj.code = 1;
@@ -53,19 +46,50 @@
                                 render();
                                 clearInterval(timer);
                             }
-                        } catch (e) {}
-                    }, 3000);
-                } else {
-                    resObj.msg = "API Error: " + res.msg;
+                        }, 3000);
+                    } else {
+                        resObj.msg = "Error: " + activeRes.msg;
+                        render();
+                    }
+                } catch (e) {
+                    resObj.msg = "Network Error";
                     render();
                 }
-            } catch (e) {
-                resObj.msg = "Network Error";
-                render();
+            } 
+            // --- 管理端：批量生成带 phone 的链接 ---
+            else {
+                document.body.innerHTML = `
+                    <div style="background:#1a1a1a; padding:20px; border:1px solid #444;">
+                        <h3>批量生产手机号链接</h3>
+                        数量: <input type="number" id="cnt" value="10" style="width:50px; background:#000; color:#0f0;">
+                        <button id="go">生成并自动复制</button>
+                        <pre id="list" style="margin-top:20px; color:#adff2f;"></pre>
+                    </div>
+                `;
+                document.getElementById('go').onclick = async () => {
+                    const count = document.getElementById('cnt').value;
+                    const list = document.getElementById('list');
+                    list.innerText = "正在取号...\n";
+                    let results = [];
+                    for (let i = 0; i < count; i++) {
+                        const res = await fetch(`${PROXY}?path=/api/sms/getPhone&token=${TOKEN}&pid=${pid}`).then(r => r.json());
+                        if (res.code === 200) {
+                            const ph = res.data.phone;
+                            const link = `${window.location.origin}${window.location.pathname}?phone=${ph}&pid=${pid}`;
+                            results.push(`+86${ph}----${link}`);
+                            list.innerText += `✔ ${ph}\n`;
+                            // 文档建议：取完号后，为了不占配额，可以立即释放
+                            await fetch(`${PROXY}?path=/api/sms/cancelRecvByPhone&token=${TOKEN}&pid=${pid}&phone=${ph}`);
+                        }
+                    }
+                    const final = results.join('\n');
+                    list.innerText = "\n--- 已复制 ---\n" + final;
+                    navigator.clipboard.writeText(final);
+                };
             }
         }
 
-        init();
+        startFlow();
     </script>
 </body>
 </html>
